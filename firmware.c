@@ -7,54 +7,9 @@
 #include <linux/spi/spidev.h>
 #include <string.h>
 #include <errno.h>
-#include <gpiod.h>
 
-#define SPI_DEVICE "/dev/spidev0.0"  // adjust as needed
-#define CS_GPIO 8  // adjust this to your CS GPIO pin number
-#define GPIO_CHIP "gpiochip0"
+#define SPI_DEVICE "/dev/spidev0.0"  // This will use hardware CS0
 #define BUF_SIZE 4096
-
-struct gpiod_chip *chip;
-struct gpiod_line *cs_line;
-
-int gpio_init(void) {
-    // Open GPIO chip
-    chip = gpiod_chip_open_by_name(GPIO_CHIP);
-    if (!chip) {
-        perror("Failed to open GPIO chip");
-        return -1;
-    }
-
-    // Get GPIO line
-    cs_line = gpiod_chip_get_line(chip, CS_GPIO);
-    if (!cs_line) {
-        perror("Failed to get GPIO line");
-        gpiod_chip_close(chip);
-        return -1;
-    }
-
-    // Request GPIO line as output
-    if (gpiod_line_request_output(cs_line, "FPGA_CS", 1) < 0) {
-        perror("Failed to request GPIO line as output");
-        gpiod_chip_close(chip);
-        return -1;
-    }
-
-    return 0;
-}
-
-int gpio_set_value(int value) {
-    return gpiod_line_set_value(cs_line, value);
-}
-
-void gpio_cleanup(void) {
-    if (cs_line) {
-        gpiod_line_release(cs_line);
-    }
-    if (chip) {
-        gpiod_chip_close(chip);
-    }
-}
 
 int spi_init(const char *device) {
     int fd;
@@ -108,27 +63,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Initialize GPIO for chip select
-    if (gpio_init() < 0) {
-        fprintf(stderr, "Failed to initialize GPIO\n");
-        return 1;
-    }
-
-    // Pull CS low
-    if (gpio_set_value(0) < 0) {
-        fprintf(stderr, "Failed to set GPIO low\n");
-        gpio_cleanup();
-        return 1;
-    }
-
-    printf("CS is now pulled low. Press Enter to continue with programming...");
+    printf("Press Enter to start programming...");
     getchar();
 
     // Open the binary file
     FILE *fp = fopen(argv[1], "rb");
     if (!fp) {
         perror("Error opening binary file");
-        gpio_cleanup();
         return 1;
     }
 
@@ -142,7 +83,6 @@ int main(int argc, char *argv[]) {
     if (!data) {
         perror("Error allocating memory");
         fclose(fp);
-        gpio_cleanup();
         return 1;
     }
 
@@ -151,7 +91,6 @@ int main(int argc, char *argv[]) {
         perror("Error reading file");
         free(data);
         fclose(fp);
-        gpio_cleanup();
         return 1;
     }
     fclose(fp);
@@ -160,13 +99,12 @@ int main(int argc, char *argv[]) {
     int spi_fd = spi_init(SPI_DEVICE);
     if (spi_fd < 0) {
         free(data);
-        gpio_cleanup();
         return 1;
     }
 
     // Write binary data
     size_t bytes_written = 0;
-    while (bytes_written < file_size) {
+    while (bytes_written < (size_t)file_size) {
         size_t chunk_size = (file_size - bytes_written) > BUF_SIZE ? 
                            BUF_SIZE : (file_size - bytes_written);
         
@@ -174,7 +112,6 @@ int main(int argc, char *argv[]) {
             perror("Error writing data");
             close(spi_fd);
             free(data);
-            gpio_cleanup();
             return 1;
         }
         bytes_written += chunk_size;
@@ -188,23 +125,13 @@ int main(int argc, char *argv[]) {
         perror("Error writing dummy bytes");
         close(spi_fd);
         free(data);
-        gpio_cleanup();
         return 1;
     }
 
     printf("Successfully wrote 49 dummy bytes\n");
 
-    // Pull CS high
-    if (gpio_set_value(1) < 0) {
-        close(spi_fd);
-        free(data);
-        gpio_cleanup();
-        return 1;
-    }
-
     // Cleanup
     close(spi_fd);
     free(data);
-    gpio_cleanup();
     return 0;
 }
