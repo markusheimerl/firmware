@@ -6,20 +6,24 @@
 #include <sys/ioctl.h>
 #include <linux/spi/spidev.h>
 #include <string.h>
-#include <linux/gpio.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <errno.h>
 
 #define SPI_DEVICE "/dev/spidev0.0"  // adjust as needed
 #define CS_GPIO 8  // adjust this to your CS GPIO pin number
 #define BUF_SIZE 4096
 
-// Function to export and set direction of GPIO
-int gpio_init(int gpio) {
+// Function to export GPIO
+int gpio_export(int gpio) {
     FILE *fp;
     char buf[64];
 
-    // Export GPIO
+    // Check if GPIO is already exported
+    snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d", gpio);
+    if (access(buf, F_OK) == 0) {
+        // GPIO is already exported
+        return 0;
+    }
+
     fp = fopen("/sys/class/gpio/export", "w");
     if (fp == NULL) {
         perror("Error opening export file");
@@ -28,19 +32,24 @@ int gpio_init(int gpio) {
     fprintf(fp, "%d", gpio);
     fclose(fp);
 
-    // Give system time to create the direction file
+    // Give system time to create the GPIO files
     usleep(100000);
+    return 0;
+}
 
-    // Set direction
+// Function to set GPIO direction
+int gpio_set_direction(int gpio, const char *direction) {
+    FILE *fp;
+    char buf[64];
+
     snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/direction", gpio);
     fp = fopen(buf, "w");
     if (fp == NULL) {
         perror("Error opening direction file");
         return -1;
     }
-    fprintf(fp, "out");
+    fprintf(fp, "%s", direction);
     fclose(fp);
-
     return 0;
 }
 
@@ -57,7 +66,6 @@ int gpio_set_value(int gpio, int value) {
     }
     fprintf(fp, "%d", value);
     fclose(fp);
-
     return 0;
 }
 
@@ -72,6 +80,19 @@ int gpio_cleanup(int gpio) {
     }
     fprintf(fp, "%d", gpio);
     fclose(fp);
+    return 0;
+}
+
+int gpio_init(int gpio) {
+    // Export GPIO
+    if (gpio_export(gpio) < 0) {
+        return -1;
+    }
+
+    // Set direction to output
+    if (gpio_set_direction(gpio, "out") < 0) {
+        return -1;
+    }
 
     return 0;
 }
@@ -130,11 +151,13 @@ int main(int argc, char *argv[]) {
 
     // Initialize GPIO for chip select
     if (gpio_init(CS_GPIO) < 0) {
+        fprintf(stderr, "Failed to initialize GPIO\n");
         return 1;
     }
 
     // Pull CS low
     if (gpio_set_value(CS_GPIO, 0) < 0) {
+        fprintf(stderr, "Failed to set GPIO low\n");
         gpio_cleanup(CS_GPIO);
         return 1;
     }
