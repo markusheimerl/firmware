@@ -6,9 +6,75 @@
 #include <sys/ioctl.h>
 #include <linux/spi/spidev.h>
 #include <string.h>
+#include <linux/gpio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
-#define SPI_DEVICE "/dev/spidev0.0"
+#define SPI_DEVICE "/dev/spidev0.0"  // adjust as needed
+#define CS_GPIO 8  // adjust this to your CS GPIO pin number
 #define BUF_SIZE 4096
+
+// Function to export and set direction of GPIO
+int gpio_init(int gpio) {
+    FILE *fp;
+    char buf[64];
+
+    // Export GPIO
+    fp = fopen("/sys/class/gpio/export", "w");
+    if (fp == NULL) {
+        perror("Error opening export file");
+        return -1;
+    }
+    fprintf(fp, "%d", gpio);
+    fclose(fp);
+
+    // Give system time to create the direction file
+    usleep(100000);
+
+    // Set direction
+    snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/direction", gpio);
+    fp = fopen(buf, "w");
+    if (fp == NULL) {
+        perror("Error opening direction file");
+        return -1;
+    }
+    fprintf(fp, "out");
+    fclose(fp);
+
+    return 0;
+}
+
+// Function to set GPIO value
+int gpio_set_value(int gpio, int value) {
+    FILE *fp;
+    char buf[64];
+
+    snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/value", gpio);
+    fp = fopen(buf, "w");
+    if (fp == NULL) {
+        perror("Error opening value file");
+        return -1;
+    }
+    fprintf(fp, "%d", value);
+    fclose(fp);
+
+    return 0;
+}
+
+// Function to cleanup GPIO
+int gpio_cleanup(int gpio) {
+    FILE *fp;
+
+    fp = fopen("/sys/class/gpio/unexport", "w");
+    if (fp == NULL) {
+        perror("Error opening unexport file");
+        return -1;
+    }
+    fprintf(fp, "%d", gpio);
+    fclose(fp);
+
+    return 0;
+}
 
 int spi_init(const char *device) {
     int fd;
@@ -22,21 +88,18 @@ int spi_init(const char *device) {
         return -1;
     }
 
-    // Set SPI mode
     if (ioctl(fd, SPI_IOC_WR_MODE, &mode) < 0) {
         perror("Error setting SPI mode");
         close(fd);
         return -1;
     }
 
-    // Set bits per word
     if (ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0) {
         perror("Error setting bits per word");
         close(fd);
         return -1;
     }
 
-    // Set max speed
     if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
         perror("Error setting speed");
         close(fd);
@@ -65,10 +128,25 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Initialize GPIO for chip select
+    if (gpio_init(CS_GPIO) < 0) {
+        return 1;
+    }
+
+    // Pull CS low
+    if (gpio_set_value(CS_GPIO, 0) < 0) {
+        gpio_cleanup(CS_GPIO);
+        return 1;
+    }
+
+    printf("CS is now pulled low. Press Enter to continue with programming...");
+    getchar();
+
     // Open the binary file
     FILE *fp = fopen(argv[1], "rb");
     if (!fp) {
         perror("Error opening binary file");
+        gpio_cleanup(CS_GPIO);
         return 1;
     }
 
@@ -82,6 +160,7 @@ int main(int argc, char *argv[]) {
     if (!data) {
         perror("Error allocating memory");
         fclose(fp);
+        gpio_cleanup(CS_GPIO);
         return 1;
     }
 
@@ -90,6 +169,7 @@ int main(int argc, char *argv[]) {
         perror("Error reading file");
         free(data);
         fclose(fp);
+        gpio_cleanup(CS_GPIO);
         return 1;
     }
     fclose(fp);
@@ -98,19 +178,21 @@ int main(int argc, char *argv[]) {
     int spi_fd = spi_init(SPI_DEVICE);
     if (spi_fd < 0) {
         free(data);
+        gpio_cleanup(CS_GPIO);
         return 1;
     }
 
     // Write binary data
     size_t bytes_written = 0;
     while (bytes_written < file_size) {
-        size_t chunk_size = (file_size - bytes_written) > BUF_SIZE ?
+        size_t chunk_size = (file_size - bytes_written) > BUF_SIZE ? 
                            BUF_SIZE : (file_size - bytes_written);
-
+        
         if (spi_transfer(spi_fd, &data[bytes_written], NULL, chunk_size) < 0) {
             perror("Error writing data");
             close(spi_fd);
             free(data);
+            gpio_cleanup(CS_GPIO);
             return 1;
         }
         bytes_written += chunk_size;
@@ -124,13 +206,23 @@ int main(int argc, char *argv[]) {
         perror("Error writing dummy bytes");
         close(spi_fd);
         free(data);
+        gpio_cleanup(CS_GPIO);
         return 1;
     }
 
     printf("Successfully wrote 49 dummy bytes\n");
 
+    // Pull CS high
+    if (gpio_set_value(CS_GPIO, 1) < 0) {
+        close(spi_fd);
+        free(data);
+        gpio_cleanup(CS_GPIO);
+        return 1;
+    }
+
     // Cleanup
     close(spi_fd);
     free(data);
+    gpio_cleanup(CS_GPIO);
     return 0;
 }
