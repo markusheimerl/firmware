@@ -1,3 +1,0 @@
-[submodule "spidriver"]
-	path = spidriver
-	url = https://github.com/jamesbowman/spidriver
