@@ -1,6 +1,6 @@
 PROJ = firmware
 CC = clang
-CFLAGS = -O3 -ffast-math -Wall -Wextra -Ispidriver/c/common
+CFLAGS = -O3 -ffast-math -Wall -Wextra
 PIN_DEF = pindef.pcf
 DEVICE = up5k
 PACKAGE = sg48
@@ -16,11 +16,11 @@ all: $(PROJ).bin
 %.bin: %.asc
 	icepack $< $@
 
-prog.out: prog.c spidriver/c/common/spidriver.c
-	$(CC) $(CFLAGS) -o $@ $^ 
+prog.out: prog.c
+	$(CC) $(CFLAGS) -o $@ $^
 
 prog: prog.out
-	@./prog.out /dev/ttyUSB0 $(PROJ).bin
+	@sudo ./prog.out $(PROJ).bin
 
 clean:
 	rm -f $(PROJ).json $(PROJ).asc $(PROJ).rpt $(PROJ).bin prog.out
